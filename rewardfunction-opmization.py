@@ -1,5 +1,6 @@
 import numpy as np
 from numpy import exp
+import math
 def reward_function(params):
     '''
     Speed: [ 0.9 : 1.6] m/s
@@ -477,7 +478,9 @@ def reward_function(params):
     progress=params['progress']
     steps=params['steps']
     track_length=params['track_length']
-    stepsK = round(2 * track_length/18,1)
+    heading=params['heading']
+    steering_angle=params['steering_angle']
+    stepsK = round(2.5 * track_length/18,1)
     track_width = params['track_width']
     speed = params['speed']
     reward_base = 1e-2
@@ -531,30 +534,58 @@ def reward_function(params):
             k = 2.5 if k > 2.5 else k
         ret = exp(k**2)
         return ret
-    def positionRewardK(curPoint,next_index,speed,track_width,race_line,mode,delta=3,k=0):
+    def positionRewardK(curPoint,next_index,speed,track_width,race_line,mode,heading,delta=3,k=0,tholdAngle=1e-5,angleThold = 15):
         line = (race_line[next_index%mode],race_line[(next_index+1)%mode])
         distance = getDistanceByLineAndPoint(line,curPoint,thold=1e-3)
         k  = 0.7 - distance * 2.0/track_width
         k = -0.1 if k < -0.1 else k
-        c = menger_curvature(curPoint, race_line[(next_index+delta)%mode], race_line[(next_index+delta*2)%mode], atol=1e-3)
+        next_point = race_line[(next_index+delta)%mode]
+        next_point2 = race_line[(next_index+delta*2)%mode]
+        deltaX = next_point2[0] - next_point[0]
+        deltaY = next_point2[1] - next_point[1]
+        direct = 0
+        if np.abs(deltaX) < tholdAngle:
+            track_direction = np.sign(deltaX) * np.pi/2
+        if deltaX > tholdAngle:
+            if deltaY > tholdAngle:
+                direct = 1
+                track_direction = math.atan2(deltaY,deltaX)
+            else:
+                direct = 4
+                track_direction = math.atan2(deltaY,deltaX) + np.pi
+        else:
+            if deltaY > tholdAngle:
+                direct = 2
+                track_direction = math.atan2(deltaY,deltaX) + np.pi
+            else:
+                direct = 3
+                track_direction = math.atan2(deltaY,deltaX) + np.pi
+        # Convert to degree
+        track_direction = math.degrees(track_direction)
+        heading = heading if heading > 0 else heading + 360
+        direction_diff = abs(track_direction - heading)
+        angleK = direction_diff/angleThold
+        angleK = 2 if angleK > 2 else angleK
+        c = menger_curvature(curPoint, next_point, next_point2, atol=1e-3)
+        
         vmax = 1.4**2 * 1.3 /(c+0.2)
         vmax = 4 if vmax > 4 else vmax
         if k > 0:
             if speed < vmax:
-                ret = exp((speed/1.6)**2)
+                ret = exp((speed/1.6)**2 * (1-angleK))
             else:
-                ret = exp((speed/2)**2) - exp((vmax/2)**2)
+                ret = exp((speed/2)**2 * (1-angleK)) - exp((vmax/2)**2 * (1-angleK))
         else:
             if speed < vmax:
-                ret = exp((speed/2)**2)
+                ret = exp((speed/2)**2 * (angleK-1))
             else:
-                ret = exp((speed/1.6)**2) - exp((vmax/1.6)**2)
+                ret = exp((speed/1.6)**2 * (angleK-1)) - exp((vmax/1.6)**2 * (angleK-1))
         ret *= 8*k
         return distance,ret
     inner_line,race_line,center_line,outer_line = loadWayPoint(waypointList)
     mode = len(race_line)-1
     k1 = stepRewardK(progress,steps,stepsK)
-    distance,k2 = positionRewardK(curPoint,next_index,speed,track_width,race_line,mode)
+    distance,k2 = positionRewardK(curPoint,next_index,speed,track_width,race_line,mode,heading)
     reward = float(reward_base * (k1 + k2))
     print(f'LOG_DATA:{x},{y},{distance},{progress},{steps},{next_index},{speed},{k1},{k2},{track_width},{reward}')
     return reward
